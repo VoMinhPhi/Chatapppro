@@ -2,92 +2,152 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
 import '../models/message.dart';
+import '../models/user.dart';
 import '../providers/chat_provider.dart';
+import 'login_screen.dart';
 
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key});
+  final String receiverId;
+  final String receiverName;
+
+  const ChatScreen({
+    super.key,
+    required this.receiverId,
+    required this.receiverName,
+  });
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
 class _ChatScreenState extends State<ChatScreen> {
+  Timer? _timer;
+  final _messageController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
-    // Lấy tin nhắn khi màn hình được tạo
-    context.read<ChatProvider>().getMessages();
+    _loadMessages();
     
-    // Cập nhật tin nhắn mỗi 3 giây
-    Timer.periodic(const Duration(seconds: 3), (_) {
+    _timer = Timer.periodic(const Duration(seconds: 3), (_) {
       if (mounted) {
-        context.read<ChatProvider>().getMessages();
+        _loadMessages();
       }
     });
+  }
+
+  void _loadMessages() {
+    context.read<ChatProvider>().getMessages(widget.receiverId);
+  }
+
+  void _sendMessage() {
+    if (_messageController.text.isNotEmpty) {
+      context.read<ChatProvider>().sendMessage(
+        _messageController.text,
+        widget.receiverId,
+      );
+      _messageController.clear();
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Chat App'),
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: Consumer<ChatProvider>(
-              builder: (context, chatProvider, child) {
-                return ListView.builder(
-                  itemCount: chatProvider.messages.length,
-                  itemBuilder: (context, index) {
-                    final message = chatProvider.messages[index];
-                    return MessageBubble(message: message);
-                  },
-                );
-              },
-            ),
-          ),
-          const MessageInput(),
-        ],
-      ),
-    );
-  }
-}
-
-class MessageInput extends StatefulWidget {
-  const MessageInput({super.key});
-
-  @override
-  State<MessageInput> createState() => _MessageInputState();
-}
-
-class _MessageInputState extends State<MessageInput> {
-  final _controller = TextEditingController();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(8.0),
-      child: Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: _controller,
-              decoration: const InputDecoration(
-                hintText: 'Nhập tin nhắn...',
+        title: Row(
+          children: [
+            CircleAvatar(
+              backgroundColor: Colors.white,
+              child: Text(
+                widget.receiverName[0].toUpperCase(),
+                style: TextStyle(color: Colors.blue[700]),
               ),
             ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.send),
-            onPressed: () {
-              if (_controller.text.isNotEmpty) {
-                context.read<ChatProvider>().sendMessage(_controller.text);
-                _controller.clear();
-              }
-            },
-          ),
-        ],
+            const SizedBox(width: 12),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(widget.receiverName),
+                Consumer<ChatProvider>(
+                  builder: (context, provider, child) {
+                    final receiver = provider.users.firstWhere(
+                      (u) => u.id == widget.receiverId,
+                    );
+                    return Text(
+                      receiver.isOnline ? 'Online' : 'Offline',
+                      style: const TextStyle(fontSize: 12),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+      body: Container(
+        decoration: BoxDecoration(
+          color: Colors.grey[100],
+        ),
+        child: Column(
+          children: [
+            Expanded(
+              child: Consumer<ChatProvider>(
+                builder: (context, chatProvider, child) {
+                  return ListView.builder(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: chatProvider.messages.length,
+                    itemBuilder: (context, index) {
+                      final message = chatProvider.messages[index];
+                      final isMyMessage = message.senderId == chatProvider.userId;
+                      return MessageBubble(
+                        message: message,
+                        isMyMessage: isMyMessage,
+                        onDelete: isMyMessage ? () => chatProvider.deleteMessage(message.id) : null,
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+            Container(
+              color: Colors.white,
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _messageController,
+                      decoration: InputDecoration(
+                        hintText: 'Nhập tin nhắn...',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(24),
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 10,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  CircleAvatar(
+                    backgroundColor: Colors.blue[700],
+                    child: IconButton(
+                      icon: const Icon(Icons.send, color: Colors.white),
+                      onPressed: _sendMessage,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -95,34 +155,86 @@ class _MessageInputState extends State<MessageInput> {
 
 class MessageBubble extends StatelessWidget {
   final Message message;
+  final bool isMyMessage;
+  final VoidCallback? onDelete;
 
-  const MessageBubble({super.key, required this.message});
+  const MessageBubble({
+    super.key,
+    required this.message,
+    required this.isMyMessage,
+    this.onDelete,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final provider = context.watch<ChatProvider>();
+    final senderName = isMyMessage 
+        ? provider.userName 
+        : provider.users.firstWhere(
+            (u) => u.id == message.senderId,
+            orElse: () => User(
+              id: '',
+              name: 'Unknown',
+              password: '',
+              isOnline: false,
+              lastSeen: DateTime.now(),
+            ),
+          ).name;
+
     return Padding(
       padding: const EdgeInsets.all(8.0),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.blue[100],
-          borderRadius: BorderRadius.circular(12),
-        ),
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              message.content,
-              style: const TextStyle(fontSize: 16),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              message.timestamp.toString(),
-              style: const TextStyle(fontSize: 12, color: Colors.grey),
-            ),
-          ],
+      child: Align(
+        alignment: isMyMessage ? Alignment.centerRight : Alignment.centerLeft,
+        child: Container(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.7,
+          ),
+          decoration: BoxDecoration(
+            color: isMyMessage ? Colors.blue[100] : Colors.grey[200],
+            borderRadius: BorderRadius.circular(12),
+          ),
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                senderName,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                  color: isMyMessage ? Colors.blue[900] : Colors.grey[900],
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                message.content,
+                style: const TextStyle(fontSize: 16),
+              ),
+              const SizedBox(height: 4),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _formatTime(message.timestamp),
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                  if (onDelete != null) ...[
+                    const SizedBox(width: 8),
+                    GestureDetector(
+                      onTap: onDelete,
+                      child: const Icon(Icons.delete, size: 16, color: Colors.red),
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
+  }
+
+  String _formatTime(DateTime time) {
+    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
   }
 } 
