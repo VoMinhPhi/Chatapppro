@@ -10,18 +10,20 @@ class User {
     required this.id,
     required this.name,
     required this.password,
-    required this.isOnline,
+    this.isOnline = false,
     required this.lastSeen,
     this.friendIds = const [],
   });
 
   factory User.fromJson(Map<String, dynamic> json) {
     return User(
-      id: json['id'],
-      name: json['name'],
-      password: json['password'],
-      isOnline: json['isOnline'],
-      lastSeen: DateTime.parse(json['lastSeen']),
+      id: json['id'] ?? '',
+      name: json['name'] ?? '',
+      password: json['password'] ?? '',
+      isOnline: json['isOnline'] ?? false,
+      lastSeen: json['lastSeen'] != null 
+          ? DateTime.parse(json['lastSeen']) 
+          : DateTime.now(),
       friendIds: List<String>.from(json['friendIds'] ?? []),
     );
   }

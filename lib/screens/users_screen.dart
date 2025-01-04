@@ -11,6 +11,7 @@ import 'find_friends_screen.dart';
 import 'friends_list_screen.dart';
 import 'create_group_screen.dart';
 import 'group_chat_screen.dart';
+import 'profile_screen.dart';
 
 class UsersScreen extends StatefulWidget {
   const UsersScreen({super.key});
@@ -41,6 +42,7 @@ class _UsersScreenState extends State<UsersScreen> with WidgetsBindingObserver {
     provider.getGroups();
     provider.getNotifications();
     provider.getPendingMessages();
+    provider.getUnreadCounts();
   }
 
   @override
@@ -70,31 +72,35 @@ class _UsersScreenState extends State<UsersScreen> with WidgetsBindingObserver {
       child: Scaffold(
         appBar: AppBar(
           title: Consumer<ChatProvider>(
-            builder: (context, provider, child) => Text('Xin chào, ${provider.userName}'),
+            builder: (context, provider, child) => Row(
+              children: [
+                CircleAvatar(
+                  backgroundColor: Colors.white,
+                  radius: 16,
+                  child: Text(
+                    provider.userName[0].toUpperCase(),
+                    style: TextStyle(
+                      color: Colors.blue[700],
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    provider.userName,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
           ),
           actions: [
-            IconButton(
-              icon: const Icon(Icons.group_add),
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const CreateGroupScreen()),
-                );
-              },
-            ),
-            IconButton(
-              icon: const Icon(Icons.people),
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const FriendsListScreen()),
-                );
-              },
-            ),
             Stack(
               children: [
                 IconButton(
                   icon: const Icon(Icons.notifications),
+                  tooltip: 'Thông báo',
                   onPressed: () => _showNotifications(context),
                 ),
                 const Positioned(
@@ -104,33 +110,83 @@ class _UsersScreenState extends State<UsersScreen> with WidgetsBindingObserver {
                 ),
               ],
             ),
-            IconButton(
-              icon: const Icon(Icons.person_add),
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const FindFriendsScreen()),
-                );
-              },
-            ),
-            IconButton(
-              icon: const Icon(Icons.logout),
-              onPressed: () async {
-                try {
-                  await context.read<ChatProvider>().logout();
-                  if (mounted) {
-                    Navigator.of(context).pushAndRemoveUntil(
-                      MaterialPageRoute(builder: (_) => const LoginScreen()),
-                      (route) => false,
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert),
+              tooltip: 'Menu',
+              onSelected: (value) {
+                switch (value) {
+                  case 'create_group':
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const CreateGroupScreen()),
                     );
-                  }
-                } catch (e) {
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Có lỗi xảy ra khi đăng xuất')),
+                    break;
+                  case 'friends':
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const FriendsListScreen()),
                     );
-                  }
+                    break;
+                  case 'add_friend':
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const FindFriendsScreen()),
+                    );
+                    break;
+                  case 'profile':
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                    );
+                    break;
+                  case 'logout':
+                    _handleLogout(context);
+                    break;
                 }
               },
+              itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'create_group',
+                  child: ListTile(
+                    leading: Icon(Icons.group_add),
+                    title: Text('Tạo nhóm mới'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'friends',
+                  child: ListTile(
+                    leading: Icon(Icons.people),
+                    title: Text('Danh sách bạn bè'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'add_friend',
+                  child: ListTile(
+                    leading: Icon(Icons.person_add),
+                    title: Text('Thêm bạn'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'profile',
+                  child: ListTile(
+                    leading: Icon(Icons.account_circle),
+                    title: Text('Hồ sơ'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                const PopupMenuDivider(),
+                const PopupMenuItem(
+                  value: 'logout',
+                  child: ListTile(
+                    leading: Icon(Icons.logout, color: Colors.red),
+                    title: Text('Đăng xuất', style: TextStyle(color: Colors.red)),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+              ],
             ),
           ],
           bottom: const TabBar(
@@ -148,6 +204,24 @@ class _UsersScreenState extends State<UsersScreen> with WidgetsBindingObserver {
         ),
       ),
     );
+  }
+
+  Future<void> _handleLogout(BuildContext context) async {
+    try {
+      await context.read<ChatProvider>().logout();
+      if (mounted) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const LoginScreen()),
+          (route) => false,
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Có lỗi xảy ra khi đăng xuất')),
+        );
+      }
+    }
   }
 
   Widget _buildFriendsList() {
@@ -193,19 +267,91 @@ class _UsersScreenState extends State<UsersScreen> with WidgetsBindingObserver {
           itemCount: friends.length,
           itemBuilder: (context, index) {
             final friend = friends[index];
+            final unreadCount = provider.unreadCounts[friend.id] ?? 0;
+
             return ListTile(
-              leading: CircleAvatar(
-                backgroundColor: friend.isOnline ? Colors.green : Colors.grey,
-                child: Text(
-                  friend.name[0].toUpperCase(),
-                  style: const TextStyle(color: Colors.white),
-                ),
+              leading: Stack(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: friend.isOnline ? Colors.green : Colors.grey,
+                    child: Text(
+                      friend.name[0].toUpperCase(),
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                  ),
+                  if (unreadCount > 0)
+                    Positioned(
+                      right: -2,
+                      top: -2,
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: Colors.red,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.white, width: 2),
+                        ),
+                        constraints: const BoxConstraints(
+                          minWidth: 20,
+                          minHeight: 20,
+                        ),
+                        child: Center(
+                          child: Text(
+                            unreadCount.toString(),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
-              title: Text(friend.name),
-              subtitle: Text(
-                friend.isOnline ? 'Online' : 'Last seen: ${_formatLastSeen(friend.lastSeen)}',
+              title: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      friend.name,
+                      style: TextStyle(
+                        fontWeight: unreadCount > 0 ? FontWeight.bold : FontWeight.normal,
+                      ),
+                    ),
+                  ),
+                  if (unreadCount > 0)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.blue[100],
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        '$unreadCount tin nhắn mới',
+                        style: TextStyle(
+                          color: Colors.blue[900],
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                ],
               ),
-              trailing: const Icon(Icons.chat),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    friend.isOnline ? 'Online' : 'Last seen: ${_formatLastSeen(friend.lastSeen)}',
+                  ),
+                  if (unreadCount > 0)
+                    Text(
+                      'Bạn có tin nhắn chưa đọc',
+                      style: TextStyle(
+                        color: Colors.blue[700],
+                        fontSize: 12,
+                      ),
+                    ),
+                ],
+              ),
               onTap: () {
                 Navigator.of(context).push(
                   MaterialPageRoute(

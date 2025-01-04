@@ -29,6 +29,10 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     _loadMessages();
     
+    // Đánh dấu tất cả tin nhắn là đã đọc khi mở chat
+    final provider = context.read<ChatProvider>();
+    provider.markAllMessagesAsRead(widget.receiverId);
+    
     _timer = Timer.periodic(const Duration(seconds: 3), (_) {
       if (mounted) {
         _loadMessages();
@@ -47,6 +51,18 @@ class _ChatScreenState extends State<ChatScreen> {
         widget.receiverId,
       );
       _messageController.clear();
+    }
+  }
+
+  Future<void> _deleteMessage(String messageId) async {
+    try {
+      await context.read<ChatProvider>().deleteMessage(messageId);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Không thể xóa tin nhắn: $e')),
+        );
+      }
     }
   }
 
@@ -107,8 +123,9 @@ class _ChatScreenState extends State<ChatScreen> {
                       final isMyMessage = message.senderId == chatProvider.userId;
                       return MessageBubble(
                         message: message,
+                        senderName: isMyMessage ? 'Bạn' : widget.receiverName,
                         isMyMessage: isMyMessage,
-                        onDelete: isMyMessage ? () => chatProvider.deleteMessage(message.id) : null,
+                        onDelete: isMyMessage ? () => _deleteMessage(message.id) : null,
                       );
                     },
                   );
@@ -157,30 +174,18 @@ class MessageBubble extends StatelessWidget {
   final Message message;
   final bool isMyMessage;
   final VoidCallback? onDelete;
+  final String senderName;
 
   const MessageBubble({
     super.key,
     required this.message,
     required this.isMyMessage,
     this.onDelete,
+    required this.senderName,
   });
 
   @override
   Widget build(BuildContext context) {
-    final provider = context.watch<ChatProvider>();
-    final senderName = isMyMessage 
-        ? provider.userName 
-        : provider.users.firstWhere(
-            (u) => u.id == message.senderId,
-            orElse: () => User(
-              id: '',
-              name: 'Unknown',
-              password: '',
-              isOnline: false,
-              lastSeen: DateTime.now(),
-            ),
-          ).name;
-
     return Padding(
       padding: const EdgeInsets.all(8.0),
       child: Align(
@@ -197,15 +202,17 @@ class MessageBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                senderName,
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
-                  color: isMyMessage ? Colors.blue[900] : Colors.grey[900],
+              if (!isMyMessage) ...[
+                Text(
+                  senderName,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                    color: Colors.grey[900],
+                  ),
                 ),
-              ),
-              const SizedBox(height: 4),
+                const SizedBox(height: 4),
+              ],
               Text(
                 message.content,
                 style: const TextStyle(fontSize: 16),
@@ -216,14 +223,29 @@ class MessageBubble extends StatelessWidget {
                 children: [
                   Text(
                     _formatTime(message.timestamp),
-                    style: const TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                  if (onDelete != null) ...[
-                    const SizedBox(width: 8),
-                    GestureDetector(
-                      onTap: onDelete,
-                      child: const Icon(Icons.delete, size: 16, color: Colors.red),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey[600],
                     ),
+                  ),
+                  if (isMyMessage) ...[
+                    const SizedBox(width: 4),
+                    Icon(
+                      message.isRead ? Icons.done_all : Icons.done,
+                      size: 16,
+                      color: message.isRead ? Colors.blue : Colors.grey[600],
+                    ),
+                    if (onDelete != null) ...[
+                      const SizedBox(width: 8),
+                      GestureDetector(
+                        onTap: onDelete,
+                        child: Icon(
+                          Icons.delete_outline,
+                          size: 16,
+                          color: Colors.red[400],
+                        ),
+                      ),
+                    ],
                   ],
                 ],
               ),

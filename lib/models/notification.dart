@@ -1,6 +1,6 @@
 class UserNotification {
   final String id;
-  final String type; // 'friend_request' hoặc 'message'
+  final String type; // 'friend_request' hoặc 'friend_accepted'
   final String fromUserId;
   final String toUserId;
   final DateTime timestamp;

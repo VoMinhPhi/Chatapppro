@@ -5,12 +5,14 @@ class MessageBubble extends StatelessWidget {
   final Message message;
   final String senderName;
   final bool isMyMessage;
+  final VoidCallback? onDelete;
 
   const MessageBubble({
     super.key,
     required this.message,
     required this.senderName,
     required this.isMyMessage,
+    this.onDelete,
   });
 
   @override
@@ -33,23 +35,52 @@ class MessageBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                senderName,
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
-                  color: isMyMessage ? Colors.blue[900] : Colors.grey[900],
+              if (!isMyMessage) ...[
+                Text(
+                  senderName,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                    color: Colors.grey[900],
+                  ),
                 ),
-              ),
-              const SizedBox(height: 4),
+                const SizedBox(height: 4),
+              ],
               Text(
                 message.content,
                 style: const TextStyle(fontSize: 16),
               ),
               const SizedBox(height: 4),
-              Text(
-                _formatTime(message.timestamp),
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _formatTime(message.timestamp),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                  if (isMyMessage) ...[
+                    const SizedBox(width: 4),
+                    Icon(
+                      message.isRead ? Icons.done_all : Icons.done,
+                      size: 16,
+                      color: message.isRead ? Colors.blue : Colors.grey[600],
+                    ),
+                    if (onDelete != null) ...[
+                      const SizedBox(width: 4),
+                      GestureDetector(
+                        onTap: onDelete,
+                        child: Icon(
+                          Icons.delete_outline,
+                          size: 16,
+                          color: Colors.red[400],
+                        ),
+                      ),
+                    ],
+                  ],
+                ],
               ),
             ],
           ),

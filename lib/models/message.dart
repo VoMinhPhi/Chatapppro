@@ -5,6 +5,7 @@ class Message {
   final String senderId;
   final String? receiverId;
   final String? groupId;
+  final bool isRead;
 
   Message({
     required this.id,
@@ -13,6 +14,7 @@ class Message {
     required this.senderId,
     this.receiverId,
     this.groupId,
+    this.isRead = false,
   });
 
   factory Message.fromJson(Map<String, dynamic> json) {
@@ -23,6 +25,7 @@ class Message {
       senderId: json['senderId'],
       receiverId: json['receiverId'],
       groupId: json['groupId'],
+      isRead: json['isRead'] ?? false,
     );
   }
 
@@ -34,6 +37,7 @@ class Message {
       'senderId': senderId,
       'receiverId': receiverId,
       'groupId': groupId,
+      'isRead': isRead,
     };
   }
 } 

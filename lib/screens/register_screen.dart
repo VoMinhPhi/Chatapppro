@@ -15,12 +15,41 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   bool _isLoading = false;
+  bool _showPassword = false;
+
+  String? _nameError;
+  String? _passwordError;
+  String? _confirmPasswordError;
 
   void _handleRegister() async {
+    setState(() {
+      _nameError = null;
+      _passwordError = null;
+      _confirmPasswordError = null;
+    });
+
+    if (_nameController.text.trim().isEmpty) {
+      setState(() => _nameError = 'Vui lòng nhập tên đăng nhập');
+      return;
+    }
+
+    if (_passwordController.text.isEmpty) {
+      setState(() => _passwordError = 'Vui lòng nhập mật khẩu');
+      return;
+    }
+
+    if (_passwordController.text.length < 6) {
+      setState(() => _passwordError = 'Mật khẩu phải có ít nhất 6 ký tự');
+      return;
+    }
+
+    if (_confirmPasswordController.text.isEmpty) {
+      setState(() => _confirmPasswordError = 'Vui lòng xác nhận mật khẩu');
+      return;
+    }
+
     if (_passwordController.text != _confirmPasswordController.text) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Mật khẩu không khớp')),
-      );
+      setState(() => _confirmPasswordError = 'Mật khẩu không khớp');
       return;
     }
 
@@ -28,11 +57,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     try {
       await context.read<ChatProvider>().register(
-        _nameController.text,
+        _nameController.text.trim(),
         _passwordController.text,
       );
 
       if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Đăng ký thành công!')),
+        );
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const LoginScreen()),
         );
@@ -119,30 +151,49 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
+                            errorText: _nameError,
                           ),
                         ),
                         const SizedBox(height: 16),
                         TextField(
                           controller: _passwordController,
-                          obscureText: true,
+                          obscureText: !_showPassword,
                           decoration: InputDecoration(
                             labelText: 'Mật khẩu',
                             prefixIcon: const Icon(Icons.lock),
+                            suffixIcon: IconButton(
+                              icon: Icon(
+                                _showPassword ? Icons.visibility_off : Icons.visibility,
+                              ),
+                              onPressed: () {
+                                setState(() => _showPassword = !_showPassword);
+                              },
+                            ),
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
+                            errorText: _passwordError,
                           ),
                         ),
                         const SizedBox(height: 16),
                         TextField(
                           controller: _confirmPasswordController,
-                          obscureText: true,
+                          obscureText: !_showPassword,
                           decoration: InputDecoration(
                             labelText: 'Xác nhận mật khẩu',
                             prefixIcon: const Icon(Icons.lock_outline),
+                            suffixIcon: IconButton(
+                              icon: Icon(
+                                _showPassword ? Icons.visibility_off : Icons.visibility,
+                              ),
+                              onPressed: () {
+                                setState(() => _showPassword = !_showPassword);
+                              },
+                            ),
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
+                            errorText: _confirmPasswordError,
                           ),
                         ),
                         const SizedBox(height: 24),

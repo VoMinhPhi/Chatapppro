@@ -7,11 +7,15 @@ import '../models/message.dart';
 import '../providers/chat_provider.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/add_member_dialog.dart';
+import '../widgets/member_list_dialog.dart';
 
 class GroupChatScreen extends StatefulWidget {
   final Group group;
 
-  const GroupChatScreen({super.key, required this.group});
+  const GroupChatScreen({
+    super.key,
+    required this.group,
+  });
 
   @override
   State<GroupChatScreen> createState() => _GroupChatScreenState();
@@ -19,19 +23,26 @@ class GroupChatScreen extends StatefulWidget {
 
 class _GroupChatScreenState extends State<GroupChatScreen> {
   final _messageController = TextEditingController();
-  final ScrollController _scrollController = ScrollController();
+  final _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
-    
-    // Kết nối WebSocket và join group
     final provider = context.read<ChatProvider>();
     provider.connectWebSocket();
+    provider.setCurrentGroup(widget.group.id);
     provider.joinGroup(widget.group.id);
     
-    // Load tin nhắn cũ
-    _loadInitialMessages();
+    _scrollToBottom();
+  }
+
+  @override
+  void dispose() {
+    _messageController.dispose();
+    _scrollController.dispose();
+    // Chỉ rời khỏi nhóm WebSocket, không xóa tin nhắn
+    context.read<ChatProvider>().leaveGroup(widget.group.id);
+    super.dispose();
   }
 
   Future<void> _loadInitialMessages() async {
@@ -43,17 +54,15 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   Future<void> _sendMessage() async {
     final content = _messageController.text.trim();
     if (content.isNotEmpty) {
-      _messageController.clear();
       try {
-        await context.read<ChatProvider>().sendGroupMessage(
-          content,
-          widget.group.id,
-        );
+        final provider = context.read<ChatProvider>();
+        await provider.sendGroupMessage(content, widget.group.id);
+        _messageController.clear();
         _scrollToBottom();
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Lỗi: $e')),
+            SnackBar(content: Text('Lỗi khi gửi tin nhắn: $e')),
           );
         }
       }
@@ -70,10 +79,46 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     }
   }
 
+  Future<void> _deleteMessage(String messageId) async {
+    try {
+      await context.read<ChatProvider>().deleteMessage(messageId);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Không thể xóa tin nhắn: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.group.name)),
+      appBar: AppBar(
+        title: Text(widget.group.name),
+        actions: [
+          // Nút xem thành viên
+          IconButton(
+            icon: const Icon(Icons.group),
+            onPressed: () {
+              showDialog(
+                context: context,
+                builder: (context) => MemberListDialog(group: widget.group),
+              );
+            },
+          ),
+          // Nút mời thành viên
+          IconButton(
+            icon: const Icon(Icons.person_add),
+            onPressed: () {
+              showDialog(
+                context: context,
+                builder: (context) => AddMemberDialog(group: widget.group),
+              );
+            },
+          ),
+        ],
+      ),
       resizeToAvoidBottomInset: true,
       body: SafeArea(
         child: Column(
@@ -111,6 +156,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                         message: message,
                         senderName: sender.name,
                         isMyMessage: isMyMessage,
+                        onDelete: isMyMessage ? () => _deleteMessage(message.id) : null,
                       );
                     },
                   );
@@ -166,14 +212,5 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         ),
       ),
     );
-  }
-
-  @override
-  void dispose() {
-    // Rời khỏi group khi thoát màn hình
-    context.read<ChatProvider>().leaveGroup(widget.group.id);
-    _messageController.dispose();
-    _scrollController.dispose();
-    super.dispose();
   }
 } 

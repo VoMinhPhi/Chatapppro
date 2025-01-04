@@ -6,11 +6,13 @@ import '../models/notification.dart';
 import '../models/group.dart';
 import 'dart:convert';
 import 'dart:io';
+import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:web_socket_channel/io.dart';
 
 class ChatProvider with ChangeNotifier {
   final List<Message> _messages = [];
   final List<User> _users = [];
-  final Dio _dio = Dio();
+  late final Dio _dio;
   final String _baseUrl = 'http://10.0.2.2:3000';
   String userName = '';
   String? userId;
@@ -19,14 +21,32 @@ class ChatProvider with ChangeNotifier {
   final List<Group> _groups = [];
   final Map<String, List<Message>> _groupMessages = {};
   String? _currentGroupId;
-  WebSocket? _socket;
+  WebSocketChannel? _channel;
   final String _wsUrl = 'ws://10.0.2.2:3000';
+  final Map<String, int> _unreadCounts = {};
+  String? _token;
+  
+  ChatProvider() {
+    _dio = Dio()
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            if (_token != null) {
+              options.headers['Authorization'] = 'Bearer $_token';
+            }
+            return handler.next(options);
+          },
+        ),
+      );
+  }
   
   List<Message> get messages => _messages;
   List<User> get users => _users;
   List<UserNotification> get notifications => _notifications;
   List<Message> get pendingMessages => _pendingMessages;
   List<Group> get groups => _groups;
+  Map<String, int> get unreadCounts => _unreadCounts;
+  String? get token => _token;
 
   Future<void> getUsers() async {
     try {
@@ -133,11 +153,19 @@ class ChatProvider with ChangeNotifier {
       final response = await _dio.delete('$_baseUrl/messages/$messageId');
       
       if (response.statusCode == 200) {
+        // Xóa tin nhắn khỏi danh sách tin nhắn cá nhân
         _messages.removeWhere((message) => message.id == messageId);
+        
+        // Xóa tin nhắn khỏi danh sách tin nhắn nhóm
+        _groupMessages.forEach((groupId, messages) {
+          messages.removeWhere((message) => message.id == messageId);
+        });
+        
         notifyListeners();
       }
     } catch (e) {
       print('Lỗi khi xóa tin nhắn: $e');
+      rethrow;
     }
   }
 
@@ -152,21 +180,18 @@ class ChatProvider with ChangeNotifier {
       );
 
       if (response.statusCode == 200) {
-        // Cập nhật danh sách users từ response
-        final fromUser = User.fromJson(response.data['fromUser']);
-        final toUser = User.fromJson(response.data['toUser']);
+        // Gửi thông báo qua WebSocket
+        _channel?.sink.add(jsonEncode({
+          'type': 'friend_request',
+          'fromUserId': userId,
+          'toUserId': targetUserId,
+        }));
         
-        // Cập nhật danh sách users
-        _users.removeWhere((u) => u.id == fromUser.id || u.id == toUser.id);
-        _users.addAll([fromUser, toUser]);
-        
-        // Thông báo UI cập nhật
         notifyListeners();
-        
-        print('Đã kết bạn thành công');
       }
     } catch (e) {
       print('Lỗi khi kết bạn: $e');
+      rethrow;
     }
   }
 
@@ -217,7 +242,9 @@ class ChatProvider with ChangeNotifier {
       );
 
       if (response.statusCode == 200) {
-        final user = User.fromJson(response.data);
+        final data = response.data;
+        final user = User.fromJson(data['user']);
+        _token = data['token'];
         userName = user.name;
         userId = user.id;
         notifyListeners();
@@ -272,31 +299,62 @@ class ChatProvider with ChangeNotifier {
     }
   }
 
-  Future<void> acceptFriendRequest(String requestId) async {
+  Future<void> markMessageAsRead(String messageId, String senderId) async {
+    try {
+      await _dio.put('$_baseUrl/messages/$messageId/read');
+      
+      // Cập nhật local state
+      final messageIndex = _messages.indexWhere((m) => m.id == messageId);
+      if (messageIndex != -1) {
+        final message = _messages[messageIndex];
+        _messages[messageIndex] = Message(
+          id: message.id,
+          content: message.content,
+          timestamp: message.timestamp,
+          senderId: message.senderId,
+          receiverId: message.receiverId,
+          groupId: message.groupId,
+          isRead: true,
+        );
+      }
+      
+      // Cập nhật số tin nhắn chưa đọc
+      if (_unreadCounts.containsKey(senderId)) {
+        _unreadCounts[senderId] = (_unreadCounts[senderId] ?? 1) - 1;
+        if (_unreadCounts[senderId]! <= 0) {
+          _unreadCounts.remove(senderId);
+        }
+      }
+      
+      notifyListeners();
+    } catch (e) {
+      print('Lỗi khi đánh dấu tin nhắn đã đọc: $e');
+    }
+  }
+
+  Future<void> acceptFriendRequest(String requestId, String fromUserId) async {
     try {
       final response = await _dio.put(
         '$_baseUrl/friend-requests/$requestId/accept',
       );
 
       if (response.statusCode == 200) {
-        // Cập nhật danh sách users từ response
-        final fromUser = User.fromJson(response.data['fromUser']);
-        final toUser = User.fromJson(response.data['toUser']);
+        // Gửi thông báo qua WebSocket
+        _channel?.sink.add(jsonEncode({
+          'type': 'friend_accepted',
+          'requestId': fromUserId,
+          'userId': userId,
+        }));
+
+        // Xóa thông báo lời mời kết bạn
+        _notifications.removeWhere((n) => n.id == requestId);
         
-        // Cập nhật danh sách users
-        _users.removeWhere((u) => u.id == fromUser.id || u.id == toUser.id);
-        _users.addAll([fromUser, toUser]);
-        
-        // Cập nhật lại toàn bộ danh sách users
-        await getUsers();
-        
-        // Thông báo UI cập nhật
+        await getUsers(); // Cập nhật danh sách bạn bè
         notifyListeners();
-        
-        print('Đã chấp nhận lời mời kết bạn thành công');
       }
     } catch (e) {
       print('Lỗi khi chấp nhận lời mời kết bạn: $e');
+      rethrow;
     }
   }
 
@@ -378,16 +436,31 @@ class ChatProvider with ChangeNotifier {
 
   void setCurrentGroup(String groupId) {
     _currentGroupId = groupId;
-    getGroupMessages(groupId); // Load tin nhắn khi chuyển nhóm
+    if (_groupMessages[groupId] == null || _groupMessages[groupId]!.isEmpty) {
+      getGroupMessages(groupId);
+    }
   }
 
   void clearCurrentGroup() {
     _currentGroupId = null;
+    notifyListeners();
   }
 
   Future<void> sendGroupMessage(String content, String groupId) async {
     try {
-      _socket?.add(jsonEncode({
+      // Đảm bảo WebSocket được kết nối
+      connectWebSocket();
+
+      if (_channel == null) {
+        // Thử kết nối lại nếu chưa có kết nối
+        await Future.delayed(const Duration(seconds: 1));
+        if (_channel == null) {
+          throw Exception('Không thể kết nối tới server');
+        }
+      }
+
+      print('Sending group message: $content to group: $groupId');
+      _channel!.sink.add(jsonEncode({
         'type': 'group_message',
         'content': content,
         'senderId': userId,
@@ -400,9 +473,7 @@ class ChatProvider with ChangeNotifier {
   }
 
   void _addGroupMessage(String groupId, Message message) {
-    if (!_groupMessages.containsKey(groupId)) {
-      _groupMessages[groupId] = [];
-    }
+    _groupMessages[groupId] ??= [];
     
     if (!_groupMessages[groupId]!.any((m) => m.id == message.id)) {
       _groupMessages[groupId]!.add(message);
@@ -417,9 +488,18 @@ class ChatProvider with ChangeNotifier {
       
       if (response.statusCode == 200) {
         final List<dynamic> data = response.data;
-        final List<Message> messages = data.map((m) => Message.fromJson(m)).toList();
+        final List<Message> newMessages = data.map((m) => Message.fromJson(m)).toList();
         
-        _groupMessages[groupId] = messages;
+        _groupMessages[groupId] ??= [];
+        
+        for (final newMsg in newMessages) {
+          if (!_groupMessages[groupId]!.any((existingMsg) => existingMsg.id == newMsg.id)) {
+            _groupMessages[groupId]!.add(newMsg);
+          }
+        }
+        
+        _groupMessages[groupId]!.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+        
         notifyListeners();
       }
     } catch (e) {
@@ -431,28 +511,101 @@ class ChatProvider with ChangeNotifier {
     return _groupMessages[groupId] ?? [];
   }
 
-  void connectWebSocket() async {
+  void connectWebSocket() {
     try {
-      _socket = await WebSocket.connect(_wsUrl);
-      _socket!.listen(
+      if (_channel != null) return;
+
+      final wsUrl = '$_wsUrl${_token != null ? '?token=$_token' : ''}';
+      print('Connecting to WebSocket: $wsUrl');
+      _channel = IOWebSocketChannel.connect(wsUrl);
+      _channel!.stream.listen(
         _handleWebSocketMessage,
-        onError: (error) => print('WebSocket error: $error'),
+        onError: (error) {
+          print('WebSocket error: $error');
+          _reconnectWebSocket();
+        },
         onDone: () {
           print('WebSocket connection closed');
-          _socket = null;
+          _reconnectWebSocket();
         },
       );
+      
+      if (userId != null) {
+        _channel!.sink.add(jsonEncode({
+          'type': 'identify',
+          'userId': userId,
+        }));
+      }
+      
+      print('WebSocket connected successfully');
     } catch (e) {
       print('Error connecting to WebSocket: $e');
+      _reconnectWebSocket();
     }
+  }
+
+  void _reconnectWebSocket() {
+    Future.delayed(const Duration(seconds: 5), () {
+      if (_channel == null) {
+        print('Attempting to reconnect WebSocket...');
+        connectWebSocket();
+      }
+    });
   }
 
   void _handleWebSocketMessage(dynamic message) {
     try {
       final data = jsonDecode(message as String);
-      if (data['type'] == 'new_message') {
-        final newMessage = Message.fromJson(data['message']);
-        _addGroupMessage(newMessage.groupId!, newMessage);
+      print('Received WebSocket message: $data');
+
+      switch (data['type']) {
+        case 'new_message':
+          final newMessage = Message.fromJson(data['message']);
+          if (newMessage.groupId != null) {
+            _addGroupMessage(newMessage.groupId!, newMessage);
+          }
+          break;
+          
+        case 'new_notification':
+          // Xử lý thông báo mới
+          final notification = UserNotification.fromJson(data['notification']);
+          if (!_notifications.any((n) => n.id == notification.id)) {
+            _notifications.add(notification);
+            notifyListeners();
+          }
+          break;
+          
+        case 'friend_request':
+          // Xử lý lời mời kết bạn
+          final notification = UserNotification.fromJson(data['notification']);
+          _notifications.add(notification);
+          notifyListeners();
+          break;
+          
+        case 'friend_accepted':
+          // Xử lý chấp nhận kết bạn
+          final notification = UserNotification.fromJson(data['notification']);
+          _notifications.add(notification);
+          // Cập nhật danh sách bạn bè
+          getUsers();
+          notifyListeners();
+          break;
+          
+        case 'message_deleted':
+          final messageId = data['messageId'];
+          final groupId = data['groupId'];
+          
+          if (groupId != null) {
+            // Xóa tin nhắn nhóm
+            if (_groupMessages.containsKey(groupId)) {
+              _groupMessages[groupId]!.removeWhere((m) => m.id == messageId);
+            }
+          } else {
+            // Xóa tin nhắn cá nhân
+            _messages.removeWhere((m) => m.id == messageId);
+          }
+          notifyListeners();
+          break;
       }
     } catch (e) {
       print('Error handling WebSocket message: $e');
@@ -460,31 +613,35 @@ class ChatProvider with ChangeNotifier {
   }
 
   void joinGroup(String groupId) {
-    _socket?.add(jsonEncode({
-      'type': 'join_group',
-      'userId': userId,
-      'groupId': groupId,
-    }));
+    if (_channel != null) {
+      print('Joining group: $groupId');
+      _channel!.sink.add(jsonEncode({
+        'type': 'join_group',
+        'userId': userId,
+        'groupId': groupId,
+      }));
+    }
   }
 
   void leaveGroup(String groupId) {
-    _socket?.add(jsonEncode({
-      'type': 'leave_group',
-      'userId': userId,
-      'groupId': groupId,
-    }));
+    if (_channel != null) {
+      print('Leaving group: $groupId');
+      _channel!.sink.add(jsonEncode({
+        'type': 'leave_group',
+        'userId': userId,
+        'groupId': groupId,
+      }));
+    }
   }
 
   Future<void> logout() async {
     try {
-      // Đóng WebSocket connection
-      _socket?.close();
-      _socket = null;
-
-      // Cập nhật trạng thái offline
+      _channel?.sink.close();
+      _channel = null;
       await updateOnlineStatus(false);
       
       // Reset tất cả dữ liệu
+      _token = null;
       _messages.clear();
       _groupMessages.clear();
       _users.clear();
@@ -500,5 +657,84 @@ class ChatProvider with ChangeNotifier {
       print('Error logging out: $e');
       rethrow;
     }
+  }
+
+  Future<void> updateProfile(String newName) async {
+    try {
+      final response = await _dio.put(
+        '$_baseUrl/users/$userId',
+        data: {
+          'name': newName,
+          'isOnline': true,
+          'lastSeen': DateTime.now().toIso8601String(),
+        },
+      );
+
+      if (response.statusCode == 200) {
+        userName = newName;
+        // Cập nhật user trong danh sách users
+        final userIndex = _users.indexWhere((u) => u.id == userId);
+        if (userIndex != -1) {
+          final updatedUser = User.fromJson(response.data);
+          _users[userIndex] = updatedUser;
+        }
+        notifyListeners();
+      }
+    } catch (e) {
+      print('Error updating profile: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> getUnreadCounts() async {
+    try {
+      final response = await _dio.get('$_baseUrl/messages/unread-count/$userId');
+      
+      if (response.statusCode == 200) {
+        _unreadCounts.clear();
+        final Map<String, dynamic> data = response.data;
+        data.forEach((key, value) {
+          _unreadCounts[key] = value as int;
+        });
+        notifyListeners();
+      }
+    } catch (e) {
+      print('Lỗi khi lấy số tin nhắn chưa đọc: $e');
+    }
+  }
+
+  Future<void> markAllMessagesAsRead(String senderId) async {
+    try {
+      // Gọi API để đánh dấu tất cả tin nhắn là đã đọc
+      await _dio.put('$_baseUrl/messages/read-all/$senderId/$userId');
+      
+      // Cập nhật local state
+      _messages.where((m) => m.senderId == senderId).forEach((m) {
+        final index = _messages.indexOf(m);
+        _messages[index] = Message(
+          id: m.id,
+          content: m.content,
+          timestamp: m.timestamp,
+          senderId: m.senderId,
+          receiverId: m.receiverId,
+          groupId: m.groupId,
+          isRead: true,
+        );
+      });
+
+      // Xóa số tin nhắn chưa đọc của người gửi này
+      _unreadCounts.remove(senderId);
+      
+      notifyListeners();
+    } catch (e) {
+      print('Lỗi khi đánh dấu tất cả tin nhắn đã đọc: $e');
+    }
+  }
+
+  @override
+  void dispose() {
+    _channel?.sink.close();
+    _channel = null;
+    super.dispose();
   }
 } 
