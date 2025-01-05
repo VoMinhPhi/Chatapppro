@@ -95,11 +95,16 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.group.name),
+        elevation: 0,
+        backgroundColor: Colors.blue[700],
+        title: Text(
+          widget.group.name,
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
         actions: [
-          // Nút xem thành viên
           IconButton(
             icon: const Icon(Icons.group),
+            tooltip: 'Xem thành viên',
             onPressed: () {
               showDialog(
                 context: context,
@@ -107,9 +112,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
               );
             },
           ),
-          // Nút mời thành viên
           IconButton(
             icon: const Icon(Icons.person_add),
+            tooltip: 'Thêm thành viên',
             onPressed: () {
               showDialog(
                 context: context,
@@ -175,7 +180,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 ],
               ),
               child: Padding(
-                padding: const EdgeInsets.all(8.0),
+                padding: const EdgeInsets.all(12.0),
                 child: Row(
                   children: [
                     Expanded(
@@ -184,25 +189,30 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                         keyboardType: TextInputType.multiline,
                         maxLines: null,
                         textInputAction: TextInputAction.newline,
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           hintText: 'Nhập tin nhắn...',
-                          border: OutlineInputBorder(),
-                          contentPadding: EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 8,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(25),
+                          ),
+                          filled: true,
+                          fillColor: Colors.grey[100],
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 20,
+                            vertical: 10,
                           ),
                         ),
-                        onSubmitted: (value) {
-                          if (value.trim().isNotEmpty) {
-                            _sendMessage();
-                          }
-                        },
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      icon: const Icon(Icons.send),
-                      onPressed: _sendMessage,
+                    const SizedBox(width: 12),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.blue[700],
+                        shape: BoxShape.circle,
+                      ),
+                      child: IconButton(
+                        icon: const Icon(Icons.send, color: Colors.white),
+                        onPressed: _sendMessage,
+                      ),
                     ),
                   ],
                 ),

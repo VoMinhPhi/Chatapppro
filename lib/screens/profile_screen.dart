@@ -58,11 +58,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Hồ sơ'),
+        elevation: 0,
+        backgroundColor: Colors.blue[700],
+        title: const Text(
+          'Hồ sơ',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
         actions: [
           if (!_isEditing)
             IconButton(
               icon: const Icon(Icons.edit),
+              tooltip: 'Chỉnh sửa',
               onPressed: () => setState(() => _isEditing = true),
             )
           else
@@ -84,18 +90,31 @@ class _ProfileScreenState extends State<ProfileScreen> {
       body: Consumer<ChatProvider>(
         builder: (context, provider, child) {
           return SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(20),
             child: Column(
               children: [
                 const SizedBox(height: 20),
-                CircleAvatar(
-                  radius: 50,
-                  backgroundColor: Colors.blue[700],
-                  child: Text(
-                    provider.userName[0].toUpperCase(),
-                    style: const TextStyle(
-                      fontSize: 40,
-                      color: Colors.white,
+                Container(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 8,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: CircleAvatar(
+                    radius: 60,
+                    backgroundColor: Colors.blue[700],
+                    child: Text(
+                      provider.userName[0].toUpperCase(),
+                      style: const TextStyle(
+                        fontSize: 48,
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
                 ),

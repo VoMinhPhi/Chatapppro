@@ -45,23 +45,41 @@ class _FindFriendsScreenState extends State<FindFriendsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Tìm bạn mới'),
+        elevation: 0,
+        backgroundColor: Colors.blue[700],
+        title: const Text(
+          'Tìm bạn mới',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
       ),
       body: Column(
         children: [
           Container(
             padding: const EdgeInsets.all(16),
-            color: Colors.white,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
             child: TextField(
               controller: _searchController,
               decoration: InputDecoration(
                 hintText: 'Tìm kiếm theo tên...',
                 prefixIcon: const Icon(Icons.search),
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(25),
                 ),
                 filled: true,
                 fillColor: Colors.grey[100],
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 10,
+                ),
               ),
               onChanged: (value) {
                 setState(() {
@@ -126,34 +144,63 @@ class UserRequestTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      leading: CircleAvatar(
-        backgroundColor: user.isOnline ? Colors.green : Colors.grey,
-        child: Text(
-          user.name[0].toUpperCase(),
-          style: const TextStyle(color: Colors.white),
+    return Card(
+      margin: const EdgeInsets.symmetric(
+        horizontal: 12,
+        vertical: 4,
+      ),
+      elevation: 0.5,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: user.isOnline ? Colors.green : Colors.grey,
+          child: Text(
+            user.name[0].toUpperCase(),
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
         ),
-      ),
-      title: Text(user.name),
-      subtitle: Text(
-        user.isOnline ? 'Online' : 'Offline',
-      ),
-      trailing: ElevatedButton(
-        onPressed: () {
-          context.read<ChatProvider>().sendFriendRequest(user.id).then((_) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Đã kết bạn với ${user.name}'),
-                duration: const Duration(seconds: 2),
-              ),
-            );
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(builder: (_) => const FriendsListScreen()),
-            );
-          });
-        },
-        child: const Text('Kết bạn'),
+        title: Text(
+          user.name,
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        subtitle: Text(
+          user.isOnline ? 'Online' : 'Offline',
+          style: TextStyle(
+            color: user.isOnline ? Colors.green : Colors.grey,
+          ),
+        ),
+        trailing: ElevatedButton(
+          onPressed: () {
+            context.read<ChatProvider>().sendFriendRequest(user.id).then((_) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Đã kết bạn với ${user.name}'),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(builder: (_) => const FriendsListScreen()),
+              );
+            });
+          },
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.blue[700],
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+            padding: const EdgeInsets.symmetric(
+              horizontal: 20,
+              vertical: 8,
+            ),
+          ),
+          child: const Text('Kết bạn'),
+        ),
       ),
     );
   }
