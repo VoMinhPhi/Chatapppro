@@ -150,21 +150,25 @@ class ChatProvider with ChangeNotifier {
 
   Future<void> deleteMessage(String messageId) async {
     try {
-      final response = await _dio.delete('$_baseUrl/messages/$messageId');
-      
+      final response = await _dio.delete(
+        '$_baseUrl/messages/$messageId',
+        options: Options(
+          headers: {
+            'Authorization': 'Bearer $_token',
+          },
+        ),
+      );
+
       if (response.statusCode == 200) {
-        // Xóa tin nhắn khỏi danh sách tin nhắn cá nhân
-        _messages.removeWhere((message) => message.id == messageId);
-        
-        // Xóa tin nhắn khỏi danh sách tin nhắn nhóm
-        _groupMessages.forEach((groupId, messages) {
-          messages.removeWhere((message) => message.id == messageId);
-        });
-        
+        // Xóa tin nhắn khỏi local state
+        for (var groupId in _groupMessages.keys) {
+          _groupMessages[groupId]?.removeWhere((m) => m.id == messageId);
+        }
+        _messages.removeWhere((m) => m.id == messageId);
         notifyListeners();
       }
     } catch (e) {
-      print('Lỗi khi xóa tin nhắn: $e');
+      print('Error deleting message: $e');
       rethrow;
     }
   }
@@ -414,23 +418,41 @@ class ChatProvider with ChangeNotifier {
 
   Future<void> addGroupMember(String groupId, String memberId) async {
     try {
+      print('Adding member $memberId to group $groupId');
       final response = await _dio.post(
         '$_baseUrl/groups/$groupId/members',
         data: {
           'memberId': memberId,
         },
+        options: Options(
+          headers: {
+            'Authorization': 'Bearer $_token',
+          },
+        ),
       );
 
       if (response.statusCode == 200) {
-        final updatedGroup = Group.fromJson(response.data);
+        final data = response.data;
+        final updatedGroup = Group.fromJson(data['group']);
+        
+        // Cập nhật group trong local state
         final index = _groups.indexWhere((g) => g.id == groupId);
         if (index != -1) {
           _groups[index] = updatedGroup;
+          
+          // Cập nhật tin nhắn nếu có
+          if (data['messages'] != null) {
+            _groupMessages[groupId] = (data['messages'] as List)
+              .map((m) => Message.fromJson(m))
+              .toList();
+          }
+          
           notifyListeners();
         }
       }
     } catch (e) {
-      print('Lỗi khi thêm thành viên: $e');
+      print('Error adding member: $e');
+      rethrow;
     }
   }
 
@@ -448,11 +470,15 @@ class ChatProvider with ChangeNotifier {
 
   Future<void> sendGroupMessage(String content, String groupId) async {
     try {
+      // Kiểm tra quyền gửi tin nhắn
+      if (!canSendMessageInGroup(groupId)) {
+        throw Exception('Bạn không có quyền gửi tin nhắn trong nhóm này');
+      }
+
       // Đảm bảo WebSocket được kết nối
       connectWebSocket();
 
       if (_channel == null) {
-        // Thử kết nối lại nếu chưa có kết nối
         await Future.delayed(const Duration(seconds: 1));
         if (_channel == null) {
           throw Exception('Không thể kết nối tới server');
@@ -465,6 +491,7 @@ class ChatProvider with ChangeNotifier {
         'content': content,
         'senderId': userId,
         'groupId': groupId,
+        'timestamp': DateTime.now().toIso8601String(),
       }));
     } catch (e) {
       print('Error sending group message: $e');
@@ -562,7 +589,21 @@ class ChatProvider with ChangeNotifier {
         case 'new_message':
           final newMessage = Message.fromJson(data['message']);
           if (newMessage.groupId != null) {
-            _addGroupMessage(newMessage.groupId!, newMessage);
+            // Kiểm tra xem người dùng có trong nhóm không
+            final group = _groups.firstWhere(
+              (g) => g.id == newMessage.groupId,
+              orElse: () => Group(
+                id: '',
+                name: '',
+                creatorId: '',
+                memberIds: [],
+                createdAt: DateTime.now(),
+              ),
+            );
+            
+            if (group.memberIds.contains(userId)) {
+              _addGroupMessage(newMessage.groupId!, newMessage);
+            }
           }
           break;
           
@@ -599,11 +640,79 @@ class ChatProvider with ChangeNotifier {
             // Xóa tin nhắn nhóm
             if (_groupMessages.containsKey(groupId)) {
               _groupMessages[groupId]!.removeWhere((m) => m.id == messageId);
+              notifyListeners();
+            }
+          }
+          break;
+          
+        case 'leave_group':
+          final leftGroupId = data['groupId'];
+          final leftUserId = data['userId'];
+          final updatedGroup = data['group'] != null ? 
+            Group.fromJson(data['group']) : null;
+          
+          if (updatedGroup != null) {
+            final index = _groups.indexWhere((g) => g.id == leftGroupId);
+            if (index != -1) {
+              _groups[index] = updatedGroup;
             }
           } else {
-            // Xóa tin nhắn cá nhân
-            _messages.removeWhere((m) => m.id == messageId);
+            // Cập nhật danh sách thành viên trong nhóm
+            final groupIndex = _groups.indexWhere((g) => g.id == leftGroupId);
+            if (groupIndex != -1) {
+              _groups[groupIndex].memberIds.remove(leftUserId);
+            }
           }
+          
+          // Nếu người rời nhóm là người dùng hiện tại
+          if (leftUserId == userId) {
+            _groupMessages.remove(leftGroupId);
+            _groups.removeWhere((g) => g.id == leftGroupId);
+          }
+          
+          notifyListeners();
+          break;
+          
+        case 'member_added':
+          final updatedGroup = Group.fromJson(data['group']);
+          final newMessage = data['message'] != null ? 
+            Message.fromJson(data['message']) : null;
+          final messages = data['messages'] != null ?
+            (data['messages'] as List).map((m) => Message.fromJson(m)).toList() : null;
+            
+          // Cập nhật thông tin nhóm
+          final index = _groups.indexWhere((g) => g.id == updatedGroup.id);
+          if (index != -1) {
+            _groups[index] = updatedGroup;
+            
+            // Nếu người dùng hiện tại là thành viên mới hoặc đã có trong nhóm
+            if (updatedGroup.memberIds.contains(userId)) {
+              // Tự động join group WebSocket
+              joinGroup(updatedGroup.id);
+              
+              // Cập nhật tin nhắn cũ của nhóm nếu có
+              if (messages != null) {
+                _groupMessages[updatedGroup.id] = messages;
+              } else {
+                // Nếu không có tin nhắn từ server, load tin nhắn
+                getGroupMessages(updatedGroup.id);
+              }
+              
+              // Thêm tin nhắn hệ thống nếu có
+              if (newMessage != null) {
+                _addGroupMessage(updatedGroup.id, newMessage);
+              }
+            }
+            
+            notifyListeners();
+          }
+          break;
+          
+        case 'group_deleted':
+          final deletedGroupId = data['groupId'];
+          // Xóa dữ liệu local
+          _groupMessages.remove(deletedGroupId);
+          _groups.removeWhere((g) => g.id == deletedGroupId);
           notifyListeners();
           break;
       }
@@ -617,17 +726,6 @@ class ChatProvider with ChangeNotifier {
       print('Joining group: $groupId');
       _channel!.sink.add(jsonEncode({
         'type': 'join_group',
-        'userId': userId,
-        'groupId': groupId,
-      }));
-    }
-  }
-
-  void leaveGroup(String groupId) {
-    if (_channel != null) {
-      print('Leaving group: $groupId');
-      _channel!.sink.add(jsonEncode({
-        'type': 'leave_group',
         'userId': userId,
         'groupId': groupId,
       }));
@@ -731,10 +829,135 @@ class ChatProvider with ChangeNotifier {
     }
   }
 
+  Future<void> kickMember(String groupId, String memberId) async {
+    try {
+      print('Attempting to kick member: $memberId from group: $groupId');
+      print('Using token: $_token');
+
+      final response = await _dio.post(
+        '$_baseUrl/kick-member',
+        data: {
+          'groupId': groupId,
+          'memberId': memberId,
+        },
+        options: Options(
+          headers: {
+            'Authorization': 'Bearer $_token',
+            'Content-Type': 'application/json',
+          },
+        ),
+      );
+      
+      print('Kick member response: ${response.data}');
+      
+      if (response.statusCode == 200) {
+        final updatedGroup = Group.fromJson(response.data['group']);
+        final index = _groups.indexWhere((g) => g.id == groupId);
+        if (index != -1) {
+          _groups[index] = updatedGroup;
+          notifyListeners();
+        }
+      } else {
+        throw response.data['error'] ?? 'Không thể xóa thành viên';
+      }
+    } catch (e) {
+      print('Error kicking member: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> leaveGroup(String groupId, [bool permanent = false]) async {
+    try {
+      if (permanent) {
+        final response = await _dio.post(
+          '$_baseUrl/leave-group',
+          data: {
+            'groupId': groupId,
+          },
+          options: Options(
+            headers: {
+              'Authorization': 'Bearer $_token',
+            },
+          ),
+        );
+        
+        if (response.statusCode == 200) {
+          // Xóa dữ liệu local
+          _groupMessages.remove(groupId);
+          _groups.removeWhere((g) => g.id == groupId);
+          notifyListeners();
+        }
+      }
+      
+      // Gửi thông báo WebSocket
+      if (_channel != null) {
+        _channel!.sink.add(jsonEncode({
+          'type': 'leave_group',
+          'groupId': groupId,
+          'userId': userId,
+        }));
+      }
+    } catch (e) {
+      print('Error leaving group: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> deleteGroup(String groupId) async {
+    try {
+      print('Attempting to delete group: $groupId');
+      print('Using token: $_token');
+
+      final response = await _dio.delete(
+        '$_baseUrl/groups/$groupId',
+        options: Options(
+          headers: {
+            'Authorization': 'Bearer $_token',
+          },
+        ),
+      );
+      
+      print('Delete group response: ${response.data}');
+
+      if (response.statusCode == 200) {
+        _groupMessages.remove(groupId);
+        _groups.removeWhere((g) => g.id == groupId);
+        notifyListeners();
+      }
+    } catch (e) {
+      print('Error deleting group: $e');
+      rethrow;
+    }
+  }
+
   @override
   void dispose() {
     _channel?.sink.close();
     _channel = null;
     super.dispose();
+  }
+
+  bool canSendMessageInGroup(String groupId) {
+    print('Checking message permission for user $userId in group $groupId');
+    
+    final group = _groups.firstWhere(
+      (g) => g.id == groupId,
+      orElse: () {
+        print('Group not found in local state');
+        return Group(
+          id: '',
+          name: '',
+          creatorId: '',
+          memberIds: [],
+          createdAt: DateTime.now(),
+        );
+      },
+    );
+    
+    print('Group members: ${group.memberIds}');
+    final canSend = group.memberIds.contains(userId);
+    print('Can send message: $canSend');
+    
+    return canSend;
   }
 } 

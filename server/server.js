@@ -8,6 +8,30 @@ const path = require('path');
 const jwt = require('jsonwebtoken');
 const SECRET_KEY = 'your-secret-key'; // Trong thực tế nên lưu trong env
 
+// Middleware xác thực token
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Token không tồn tại' });
+  }
+
+  jwt.verify(token, SECRET_KEY, (err, user) => {
+    if (err) {
+      return res.status(403).json({ error: 'Token không hợp lệ' });
+    }
+    req.user = user;
+    next();
+  });
+};
+
+// Áp dụng middleware cho các API cần xác thực
+app.use('/messages', authenticateToken);
+app.use('/groups', authenticateToken);
+app.use('/friend-requests', authenticateToken);
+app.use('/notifications', authenticateToken);
+
 // Khởi tạo WebSocket server
 const wss = new WebSocket.Server({ server: server });
 
@@ -63,10 +87,36 @@ wss.on('connection', (ws, req) => {
             break;
 
           case 'leave_group':
-            if (groupConnections.has(message.groupId)) {
-              groupConnections.get(message.groupId).delete(ws);
+            const leaveGroupId = message.groupId;
+            const leaveUserId = message.userId;
+            if (groupConnections.has(leaveGroupId)) {
+              groupConnections.get(leaveGroupId).delete(ws);
             }
-            console.log(`User ${message.userId} left group ${message.groupId}`);
+            // Broadcast to all members except the one leaving
+            wss.clients.forEach(client => {
+              if (client.readyState === WebSocket.OPEN && 
+                  client.userId !== leaveUserId) {
+                client.send(JSON.stringify({
+                  type: 'leave_group',
+                  groupId: leaveGroupId,
+                  userId: leaveUserId
+                }));
+              }
+            });
+            break;
+
+          case 'member_kicked':
+            const kickGroupId = message.groupId;
+            const kickedMemberId = message.memberId;
+            wss.clients.forEach(client => {
+              if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({
+                  type: 'member_kicked',
+                  groupId: kickGroupId,
+                  memberId: kickedMemberId
+                }));
+              }
+            });
             break;
 
           case 'group_message':
@@ -233,9 +283,16 @@ function removeDuplicateUsers() {
 
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
   next();
+});
+
+app.options('*', (req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
+  res.sendStatus(200);
 });
 
 app.use(express.json());
@@ -336,66 +393,60 @@ app.get('/messages/:userId1/:userId2', (req, res) => {
   res.json(conversationMessages);
 });
 
-// Middleware kiểm tra token
-const validateToken = (req, res, next) => {
-  const { senderId, groupId } = req.body;
-
-  // Kiểm tra token người dùng
-  if (senderId) {
-    const user = users.find(u => u.id === senderId);
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid user token' });
-    }
-  }
-
-  // Kiểm tra token nhóm
-  if (groupId) {
-    const group = groups.find(g => g.id === groupId);
-    if (!group) {
-      return res.status(401).json({ error: 'Invalid group token' });
-    }
-  }
-
-  next();
-};
-
-// Áp dụng middleware
-app.post('/messages', validateToken, (req, res) => {
+// API gửi tin nhắn
+app.post('/messages', authenticateToken, (req, res) => {
   try {
     console.log('Received message:', req.body);
     
-    // Validate các token bắt buộc
+    // Validate dữ liệu bắt buộc
     const { content, senderId, groupId } = req.body;
     if (!content || !senderId) {
-      return res.status(400).json({ error: 'Missing required tokens' });
+      return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Tạo message với token
-  const message = {
-    id: Date.now().toString(),
+    // Tạo message mới
+    const message = {
+      id: Date.now().toString(),
       content,
-      timestamp: req.body.timestamp,
+      timestamp: req.body.timestamp || new Date().toISOString(),
       senderId,
       receiverId: req.body.receiverId || null,
       groupId: groupId || null,
-      isRead: false,  // Mặc định là chưa đọc
+      isRead: false,
     };
 
-    // Kiểm tra token nhóm nếu là tin nhắn nhóm
+    // Kiểm tra quyền gửi tin nhắn trong nhóm
     if (groupId) {
       const group = groups.find(g => g.id === groupId);
       if (!group) {
-        return res.status(404).json({ error: 'Invalid group token' });
+        return res.status(404).json({ error: 'Group not found' });
       }
-      // Kiểm tra token người gửi có trong nhóm không
+      // Kiểm tra người gửi có trong nhóm không
       if (!group.memberIds.includes(senderId)) {
-        return res.status(403).json({ error: 'User token not in group' });
+        return res.status(403).json({ error: 'User not in group' });
       }
     }
 
-  messages.push(message);
+    messages.push(message);
     saveData();
-  res.json(message);
+
+    // Gửi tin nhắn qua WebSocket nếu là tin nhắn nhóm
+    if (groupId) {
+      const connections = groupConnections.get(groupId);
+      if (connections) {
+        const broadcastMessage = JSON.stringify({
+          type: 'new_message',
+          message
+        });
+        connections.forEach(client => {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(broadcastMessage);
+          }
+        });
+      }
+    }
+
+    res.json(message);
   } catch (error) {
     console.error('Error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -673,35 +724,84 @@ app.get('/groups/user/:userId', (req, res) => {
 });
 
 // API thêm thành viên vào nhóm
-app.post('/groups/:groupId/members', (req, res) => {
+app.post('/groups/:groupId/members', authenticateToken, (req, res) => {
   try {
+    console.log('Adding member to group:', req.body);
     const groupId = req.params.groupId;
     const memberId = req.body.memberId;
     
+    // Tìm thông tin người được thêm
+    const newMember = users.find(u => u.id === memberId);
+    if (!newMember) {
+      return res.status(404).json({ error: 'Không tìm thấy người dùng' });
+    }
+    
     const group = groups.find(g => g.id === groupId);
     if (!group) {
-      return res.status(404).json({ error: 'Group not found' });
+      return res.status(404).json({ error: 'Không tìm thấy nhóm' });
+    }
+
+    // Kiểm tra quyền
+    if (group.creatorId !== req.user.id) {
+      return res.status(403).json({ error: 'Chỉ người tạo nhóm mới có quyền thêm thành viên' });
     }
 
     if (!group.memberIds.includes(memberId)) {
+      // Thêm thành viên mới
       group.memberIds.push(memberId);
+      
+      // Thêm tin nhắn hệ thống
+      const systemMessage = {
+        id: Date.now().toString(),
+        content: `${newMember.name} đã được thêm vào nhóm`,
+        timestamp: new Date().toISOString(),
+        senderId: 'system',
+        groupId: groupId,
+        isRead: false,
+      };
+      messages.push(systemMessage);
+      
+      // Lấy tất cả tin nhắn của nhóm
+      const groupMessages = messages.filter(m => m.groupId === groupId);
+      
       saveData();
 
-      // Gửi thông báo cho thành viên mới qua WebSocket
-      const memberConnection = [...wss.clients].find(client => 
-        client.userId === memberId
-      );
-      if (memberConnection) {
-        memberConnection.send(JSON.stringify({
-          type: 'group_invitation',
-          group,
-        }));
-      }
-    }
+      // Gửi thông báo WebSocket cho tất cả thành viên và người mới
+      wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN && 
+            (group.memberIds.includes(client.userId) || client.userId === memberId)) {
+          client.send(JSON.stringify({
+            type: 'member_added',
+            group: group,
+            message: systemMessage,
+            messages: groupMessages,
+            newMember: {
+              id: newMember.id,
+              name: newMember.name
+            }
+          }));
+        }
+      });
 
-    res.json(group);
+      // Trả về đầy đủ thông tin
+      res.json({
+        success: true,
+        group: group,
+        messages: groupMessages,
+        newMember: {
+          id: newMember.id,
+          name: newMember.name
+        }
+      });
+    } else {
+      res.json({
+        success: true,
+        group: group,
+        messages: messages.filter(m => m.groupId === groupId)
+      });
+    }
   } catch (error) {
-    console.error('Error adding group member:', error);
+    console.error('Error adding member:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -750,7 +850,7 @@ app.delete('/groups/:groupId/members/:memberId', (req, res) => {
 });
 
 // API xóa tin nhắn
-app.delete('/messages/:messageId', (req, res) => {
+app.delete('/messages/:messageId', authenticateToken, (req, res) => {
   try {
     const messageId = req.params.messageId;
     const messageIndex = messages.findIndex(m => m.id === messageId);
@@ -760,34 +860,31 @@ app.delete('/messages/:messageId', (req, res) => {
     }
 
     const message = messages[messageIndex];
+    
+    // Kiểm tra quyền xóa tin nhắn
+    if (message.senderId !== req.user.id) {
+      return res.status(403).json({ error: 'Không có quyền xóa tin nhắn này' });
+    }
+
+    // Xóa tin nhắn
     messages.splice(messageIndex, 1);
     saveData();
 
-    // Gửi thông báo xóa tin nhắn
+    // Gửi thông báo xóa tin nhắn qua WebSocket
     if (message.groupId) {
-      const connections = groupConnections.get(message.groupId);
-      if (connections) {
-        const deleteNotification = JSON.stringify({
-          type: 'message_deleted',
-          messageId,
-          groupId: message.groupId,
-        });
-        connections.forEach(client => {
-          if (client.readyState === WebSocket.OPEN) {
-            client.send(deleteNotification);
+      // Thông báo cho tất cả thành viên trong nhóm
+      const group = groups.find(g => g.id === message.groupId);
+      if (group) {
+        wss.clients.forEach(client => {
+          if (client.readyState === WebSocket.OPEN && 
+              group.memberIds.includes(client.userId)) {
+            client.send(JSON.stringify({
+              type: 'message_deleted',
+              messageId,
+              groupId: message.groupId
+            }));
           }
         });
-      }
-    } else {
-      // Xử lý tin nhắn 1-1
-      const receiverConnection = [...wss.clients].find(client => 
-        client.userId === message.receiverId
-      );
-      if (receiverConnection) {
-        receiverConnection.send(JSON.stringify({
-          type: 'message_deleted',
-          messageId,
-        }));
       }
     }
 
@@ -798,29 +895,180 @@ app.delete('/messages/:messageId', (req, res) => {
   }
 });
 
+// API rời nhóm
+app.post('/leave-group', authenticateToken, (req, res) => {
+  try {
+    const { groupId } = req.body;
+    const userId = req.user.id;
+    
+    // Tìm nhóm
+    const group = groups.find(g => g.id === groupId);
+    if (!group) {
+      return res.status(404).json({ error: 'Không tìm thấy nhóm' });
+    }
+
+    // Kiểm tra xem người dùng có trong nhóm không
+    if (!group.memberIds.includes(userId)) {
+      return res.status(400).json({ error: 'Người dùng không trong nhóm' });
+    }
+
+    // Không cho phép người tạo nhóm rời nhóm
+    if (group.creatorId === userId) {
+      return res.status(400).json({ error: 'Người tạo nhóm không thể rời nhóm' });
+    }
+
+    // Xóa userId khỏi danh sách thành viên
+    group.memberIds = group.memberIds.filter(id => id !== userId);
+    
+    // Thêm tin nhắn hệ thống
+    const systemMessage = {
+      id: Date.now().toString(),
+      content: `${userId} đã rời khỏi nhóm`,
+      timestamp: new Date().toISOString(),
+      senderId: 'system',
+      groupId: groupId,
+      isRead: false,
+    };
+    messages.push(systemMessage);
+    
+    // Lưu thay đổi
+    saveData();
+
+    // Gửi thông báo WebSocket cho các thành viên còn lại
+    wss.clients.forEach(client => {
+      if (client.readyState === WebSocket.OPEN && 
+          (group.memberIds.includes(client.userId) || client.userId === userId)) {
+        client.send(JSON.stringify({
+          type: 'leave_group',
+          groupId,
+          userId,
+          group
+        }));
+      }
+    });
+
+    res.json({ success: true, group });
+  } catch (error) {
+    console.error('Error leaving group:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Chạy removeDuplicateUsers mỗi phút đ tránh trùng lặp
 setInterval(removeDuplicateUsers, 60 * 1000);
 
-// Middleware xác thực token
-const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+// Thêm API endpoint để kick thành viên
+app.post('/kick-member', authenticateToken, (req, res) => {
+  try {
+    console.log('Received kick member request:', req.body);
+    console.log('User from token:', req.user);
 
-  if (!token) {
-    return res.status(401).json({ error: 'Token không tồn tại' });
-  }
-
-  jwt.verify(token, SECRET_KEY, (err, user) => {
-    if (err) {
-      return res.status(403).json({ error: 'Token không hợp lệ' });
+    const { groupId, memberId } = req.body;
+    const requesterId = req.user.id;
+    
+    // Tìm nhóm
+    const group = groups.find(g => g.id === groupId);
+    if (!group) {
+      console.log('Group not found:', groupId);
+      return res.status(404).json({ error: 'Không tìm thấy nhóm' });
     }
-    req.user = user;
-    next();
-  });
-};
 
-// Áp dụng middleware cho các API cần xác thực
-app.use('/messages', authenticateToken);
-app.use('/groups', authenticateToken);
-app.use('/friend-requests', authenticateToken);
-app.use('/notifications', authenticateToken);
+    console.log('Found group:', group);
+    console.log('Requester ID:', requesterId);
+    console.log('Creator ID:', group.creatorId);
+
+    // Kiểm tra quyền
+    if (group.creatorId !== requesterId) {
+      console.log('Permission denied: User is not group creator');
+      return res.status(403).json({ error: 'Chỉ người tạo nhóm mới có quyền kick thành viên' });
+    }
+
+    // Kiểm tra thành viên
+    if (!group.memberIds.includes(memberId)) {
+      console.log('Member not in group:', memberId);
+      return res.status(400).json({ error: 'Thành viên không có trong nhóm' });
+    }
+
+    if (memberId === group.creatorId) {
+      console.log('Cannot kick creator');
+      return res.status(400).json({ error: 'Không thể kick người tạo nhóm' });
+    }
+
+    // Xóa thành viên
+    group.memberIds = group.memberIds.filter(id => id !== memberId);
+    console.log('Updated group members:', group.memberIds);
+    
+    // Lưu thay đổi
+    saveData();
+
+    // Gửi thông báo WebSocket
+    wss.clients.forEach(client => {
+      if (client.readyState === WebSocket.OPEN && 
+          (group.memberIds.includes(client.userId) || client.userId === memberId)) {
+        client.send(JSON.stringify({
+          type: 'member_kicked',
+          groupId,
+          memberId,
+          group
+        }));
+      }
+    });
+
+    console.log('Successfully kicked member');
+    res.json({ success: true, group });
+  } catch (error) {
+    console.error('Error kicking member:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// API xóa nhóm
+app.delete('/groups/:groupId', authenticateToken, (req, res) => {
+  try {
+    const groupId = req.params.groupId;
+    const userId = req.user.id;
+    
+    console.log('Delete group request:', {
+      groupId,
+      userId,
+      token: req.headers.authorization
+    });
+
+    // Tìm nhóm
+    const group = groups.find(g => g.id === groupId);
+    if (!group) {
+      return res.status(404).json({ error: 'Không tìm thấy nhóm' });
+    }
+
+    // Kiểm tra quyền xóa nhóm
+    if (group.creatorId !== userId) {
+      return res.status(403).json({ error: 'Chỉ người tạo nhóm mới có quyền xóa nhóm' });
+    }
+
+    // Xóa tất cả tin nhắn của nhóm
+    messages = messages.filter(m => m.groupId !== groupId);
+
+    // Xóa nhóm
+    groups = groups.filter(g => g.id !== groupId);
+    
+    // Lưu thay đổi
+    saveData();
+
+    // Gửi thông báo WebSocket cho tất cả thành viên
+    wss.clients.forEach(client => {
+      if (client.readyState === WebSocket.OPEN && 
+          group.memberIds.includes(client.userId)) {
+        client.send(JSON.stringify({
+          type: 'group_deleted',
+          groupId,
+          deletedBy: userId
+        }));
+      }
+    });
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting group:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});

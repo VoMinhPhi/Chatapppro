@@ -1,6 +1,8 @@
 {
   "dependencies": {
     "jsonwebtoken": "^9.0.2",
+    "mongodb": "^6.12.0",
+    "mongoose": "^8.9.3",
     "ws": "^8.18.0"
   }
 }

@@ -6,61 +6,78 @@ import '../providers/chat_provider.dart';
 
 class MemberListDialog extends StatelessWidget {
   final Group group;
+  final Function(String)? onKickMember;
 
-  const MemberListDialog({super.key, required this.group});
+  const MemberListDialog({
+    super.key,
+    required this.group,
+    this.onKickMember,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'Thành viên trong nhóm',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
+      child: Consumer<ChatProvider>(
+        builder: (context, provider, child) {
+          final members = provider.users
+              .where((u) => group.memberIds.contains(u.id))
+              .toList();
+
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AppBar(
+                title: const Text('Thành viên nhóm'),
+                automaticallyImplyLeading: false,
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
               ),
-            ),
-            const SizedBox(height: 16),
-            Consumer<ChatProvider>(
-              builder: (context, provider, child) {
-                final members = provider.users.where((user) =>
-                  group.memberIds.contains(user.id)
-                ).toList();
-
-                if (members.isEmpty) {
-                  return const Center(
-                    child: Text('Không có thành viên nào'),
-                  );
-                }
-
-                return ListView.builder(
+              Flexible(
+                child: ListView.builder(
                   shrinkWrap: true,
                   itemCount: members.length,
                   itemBuilder: (context, index) {
-                    final user = members[index];
+                    final member = members[index];
+                    final isCreator = member.id == group.creatorId;
+                    
                     return ListTile(
                       leading: CircleAvatar(
-                        backgroundColor: user.isOnline ? Colors.green : Colors.grey,
+                        backgroundColor: member.isOnline ? Colors.green : Colors.grey,
                         child: Text(
-                          user.name[0].toUpperCase(),
+                          member.name[0].toUpperCase(),
                           style: const TextStyle(color: Colors.white),
                         ),
                       ),
-                      title: Text(user.name),
-                      subtitle: Text(
-                        user.isOnline ? 'Online' : 'Offline',
+                      title: Text(
+                        member.name + (isCreator ? ' (Người tạo)' : ''),
+                        style: TextStyle(
+                          fontWeight: isCreator ? FontWeight.bold : FontWeight.normal,
+                        ),
                       ),
+                      subtitle: Text(
+                        member.isOnline ? 'Online' : 'Offline',
+                      ),
+                      trailing: !isCreator && onKickMember != null && member.id != provider.userId
+                          ? IconButton(
+                              icon: const Icon(Icons.remove_circle_outline),
+                              color: Colors.red,
+                              onPressed: () {
+                                Navigator.pop(context);
+                                onKickMember!(member.id);
+                              },
+                            )
+                          : null,
                     );
                   },
-                );
-              },
-            ),
-          ],
-        ),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
